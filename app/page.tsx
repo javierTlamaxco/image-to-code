@@ -4,6 +4,9 @@ import { Button } from '@/components/ui/button'
 import { Form } from './Form'
 import { POST } from './api/generate-image-from-code/route'
 import { useState } from 'react'
+import { DragAndDrop } from './api/generate-image-from-code/draganddrop'
+import { read } from 'fs'
+import { error } from 'console'
 
 const STEPS = {
 	INITIAL: 'INITIAL',
@@ -12,15 +15,45 @@ const STEPS = {
 	ERROR: 'ERROR',
 }
 
+const toBase64 = (file : File) => {
+  return new Promise<string>((resolve, reject) => {
+    const reader =  new FileReader()
+    reader.readAsDataURL(file)
+    reader.onload = () => resolve(reader.result as string)
+    reader.onerror = (error) => reject (error)
+  }) 
+}
+
+//Funcion generadora (Puede devolver mas de un resultado)
+//palabra reservada para usar funciones generadoras es "yield"
+//la funcion generadora devuelve mas de un result en vez de solo devolver un result
+//cuando se invoca
+async function* streamReader(res : Response) {
+  //leer el streaming de datos
+  const reader = res.body?.getReader()
+  const decoder = new TextDecoder()
+  if(reader == null) return
+
+  while (true) {
+    const { done, value } = await reader.read()
+    const chunk = decoder.decode(value)
+
+    yield chunk
+    console.log(chunk)
+
+    if (done) break
+  }
+}
+
 export default function Home() {
 	const [result, setResult] = useState('')
 	const [step, setStep] = useState(STEPS.INITIAL)
 
-	const transformUrlToCode = async (url: string) => {
-		setStep(STEPS.LOADING)
+  const transformToCode = async ( body : string ) => {
+    setStep(STEPS.LOADING)
 		const res = await fetch('api/generate-code-from-image', {
 			method: 'POST',
-			body: JSON.stringify({ url }),
+			body,
 			headers: {
 				'Content-Type': 'application/json',
 			},
@@ -33,20 +66,22 @@ export default function Home() {
 
 		setStep(STEPS.PREVIEW)
 
-		//leer el streaming de datos
-		const reader = res.body.getReader()
-		const decoder = new TextDecoder()
+		 for await ( const chunk of streamReader(res)) {
+        setResult((prev) => prev + chunk)
+     }
+  }
 
-		while (true) {
-			const { done, value } = await reader.read()
-			const chunk = decoder.decode(value)
+  const transformImageToCode = async ( file: File) => {
+      const img = await toBase64(file);
 
-			setResult((prevResult) => prevResult + chunk)
-			console.log(chunk)
+     await transformToCode (JSON.stringify({img}))
+  }
 
-			if (done) break
-		}
+	const transformUrlToCode = async (url: string) => {
+    await transformToCode (JSON.stringify({url}))
 	}
+
+  const [background, html = ''] = result.split('|||')
 
 	return (
 		<div className="grid grid-cols-[400px_1fr]">
@@ -86,15 +121,17 @@ export default function Home() {
 						</div>
 					)}
 
-					{step === STEPS.INITIAL && <Form transformUrlToCode={transformUrlToCode} />}
+					{step === STEPS.INITIAL &&  (<div className='flex flex-col gap-4'>
+            <DragAndDrop transformImageToCode = {transformImageToCode}/>
+            <Form transformUrlToCode={transformUrlToCode} /></div>)}
 
 					{step === STEPS.PREVIEW && (
 						<div className="rounded border flex flex-col gap-4">
-              <div>
-							  <iframe srcDoc={result} className="w-full h-full border-4 border-gray-700 rounded aspect-video" />
+              <div className = 'w-full h-full border-4 border-gray-700 rounded aspect-video' style={ {backgroundColor : `#${background ? background.trim() : 'fff'}`}}>
+							  <iframe srcDoc={html} className='w-full h-full' />
               </div>
 							<pre className='pt-10'>
-								<code>{result}</code>
+								<code>{html}</code>
 							</pre>
 						</div>
 					)}
